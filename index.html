@@ -28,16 +28,6 @@
         var width_info = 400;
         
         var internal_buffer = 20;
-        var x_nodes = d3.scaleLinear()
-            .range([0, width - width_info - internal_buffer]);
-        
-        // the nodes sould probably be closer together
-        var y = d3.scaleBand()
-            .rangeRound([height/4, height/2]);
-        
-        var clr = d3.scaleLinear()
-            .range(['green', 'yellow', 'brown'])
-            .domain([1, .5, 0]);
         
         var node_height = 15;
         
@@ -120,8 +110,19 @@
             .attr('font-size', '25')
             .text('TIMSS 2011: Comparing Correct Response Rate')
         
-        color_key_radius = 10
+        var color_key_radius = 10
         
+        var x_nodes = d3.scaleLinear()
+            .range([0, width - width_info - internal_buffer]);
+        
+        // the nodes sould probably be closer together
+        var y = d3.scaleBand()
+            .rangeRound([0, (.75 * height)]);
+        
+        var clr = d3.scaleLinear()
+            .range(['green', 'yellow', 'brown'])
+            .domain([1, .5, 0]);
+
         color_key = d3.select('svg')
             .selectAll('circle')
             .data([[.25, 1], [.5, .5], [.75, 0]])
@@ -138,7 +139,7 @@
             .data([[.25, '100% Success Rate'],[.5, '50% Success Rate'], [.75, '0% Success Rate']])
             .enter().append('text')
             .attr('x', function(d){ return ((width - width_info - internal_buffer) * d[0]) + (color_key_radius * 2)})
-            .attr('y', height - color_key_radius + (color_key_radius/2))
+            .attr('y', height - (color_key_radius/2))
             .text(function(d){ return d[1]})
 
         function display_question_info(obj){
@@ -164,9 +165,7 @@
             }
             return text2.concat(text);
         }
-        
-        question_info = {};
-        
+                
         function update_info(array){
                 from_top = 0                
             
@@ -178,7 +177,7 @@
                     .enter().append('text')
                     .attr('x', '5')
                     .attr('y', function(d, i){
-                        if([0, 5, 11].indexOf(i) >= 0){
+                        if([0, 5, 11, 17, 23].indexOf(i) >= 0){
                             from_top += 25
                             return from_top
                         } else {
@@ -191,12 +190,21 @@
                     .attr('font-size', '15')
         }
         
-        d3.json('timss_nodes_links_2011.json', function(error, json){
+        
+        //question info contains all the question and country data for a particular question
+        question_info = {};        
+        
+        d3.json('d3_timss.json', function(error, json){
             if(error) throw error;
             
             data = json
-
-            for(i = 0; i < data[0].length; i++){
+        
+            x_nodes.domain(d3.extent(json[0].map(function(i){ return i.question_rank })));
+            var yPoints = ['Chile', 'Japan', 'Korea', 'USA'];
+            y.domain(yPoints);    
+            
+            //organize question_info
+            for(i = 0; i < json[0].length; i++){
                 obj = data[0][i];
                 ques = obj.question;
                 rank = obj.question_rank;
@@ -236,12 +244,6 @@
                 }
             }
             
-            var yPoints = ['Chile', 'USA'];
-            
-            x_nodes.domain(d3.extent(json[0].map(function(i){ return i.question_rank })));
-            
-            y.domain(yPoints);
-            
             rect = svg.selectAll('rect')
                 .data(json[0])
                 .enter().append('rect')
@@ -252,10 +254,14 @@
                 .attr('width', '3')
                 .attr('height', node_height)
                 .attr('fill', function(d){return clr(d.correct_ratio_per_question);})
-                
+            
+            line_data = []
+            for(i = 1; i < json.length; i++){
+                line_data = line_data.concat(json[i])
+            }
             
             lines = svg.selectAll('line')
-                .data(json[1])
+                .data(line_data)
                 .enter().append('line')
                 .attr('class', function(d){return d.question})
                 .attr('x1', function(d){return x_nodes(d.x1)})
@@ -267,7 +273,7 @@
                 .attr('stroke-opacity', '.3')
             
             svg.append('g')
-                .attr('transform', 'translate(' + '0' + ',' + (node_height * 1.5) +')')
+                .attr('transform', 'translate(' + '0' + ',' + (.5 * node_height) +')')
                 .call(d3.axisLeft(y))
 
             var chosen = '';
@@ -276,7 +282,7 @@
         
             rect.on('click', function(){
                 if(chosen != ''){
-                    d3.select('line.' + chosen)
+                    d3.selectAll('line.' + chosen)
                         .attr('stroke', 'grey')
                         .attr('stroke-width', '1')
                         .attr('stroke-opacity', '.3')
@@ -291,7 +297,7 @@
                 
                 chosen = this.className.baseVal.split(' ')[0]
                 
-                d3.select('line.'+chosen)
+                d3.selectAll('line.'+chosen)
                     .attr('stroke', 'orange')
                     .attr('stroke-width', '3')
                     .attr('stroke-opacity', '1')
