@@ -1,0 +1,478 @@
+---
+title: "Cleaning and Visualizing 2011 TIMSS Question Level Data With R"
+author: "BeeMyFriend"
+date: "February 7, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+The **Trends in International Math and Science Study (TIMSS)** is a series of international assessments of the mathematics and science knowledge of students around the world. It is administered by both the **International Association for the Evaluation of Educational achievement (IEA)** and **Boston College (BC)** who first conducted the assessments in 1995 and readministered them every 4 years after that (1999, 2003, 2007, 2011, and 2015). Different versions of the assessments are given to 4th graders and 8th graders of participating countries which assess students grasp of different cognitive and content domains. Every assesment contains both multiple choice and free-response style questions. After the test is given, each student who has taken the test is given a performance score ranging from 0 as the lowest to 1000 as the highest. Each participating country, in turn, is given a performance score which is the average of all of its students' scores. The study uses the scores  625, 550, 475, and 400 to represent advanced, high, intermediate, and low international benchmarks respectively. That is, a student with a performance score greater than 625 is considered to have an advanced grasp of either math or science while a student with a performance score less than 400 is considered  to have a below low grasp of either math or science. 
+
+This article will visualize the **2011 TIMSS Math Assesment** given to 8th grade students of the Republic of Korea, Lithuania, the United States of America, and Chile. In particular it will visualize the typical response provided by students of each country to each question asked. Korea performed the best of all 45 participating countries with a performance score of 613. Lithuania performed just above the TIMSS scale centerpoint with a score of 502. Both the USA and Chile are countries of personal interest with scores of 509 and 416 respectively.
+
+It is worth noting, however, that the IEA and BC consider countries with more than 15% of students scoring less than 400 as countries that can not be reliably assessed. This is because such a high rate of below low performers suggest an increased probability of random guessing. If we eliminate all the countries that could not be reliably assessed, then the country with the lowest performance score is Chile, one of the two countries of interest. 
+
+The visualization will be conducted using the R programming language. However, the data provided by the IEA is not organized in a way that allows R to visualize the data properly, so this article will also show how to use the concepts of **tidy data** to prepare the TIMSS dataset for visualization. 
+
+## Obtaining Data
+
+IEA has a data repository where it publicly displays study data. It can be accessed by going to http://rms.iea-dpc.org/. The order of clicks goes in the order of SEARCH > TIMSS > Grade 8 > 2011 > Chile::Student Test Responses > Korea, Rep. of::Student Test Responses > Lithuania::Student Test Responses > United States::Student Test Responses > SPSS > Codebooks > Download Name:::Whatever > Add To Basket > View Basket > (disk/save icon)
+
+## Cleaning Data
+
+The first thing we will need to do is attach all of the relevant packages. The tidyverse package is important because it includes the dplyr (cleaning), tidyr (cleaning) and ggplot (visualizing) packages as well as the magrittr (%>%) package. The stringr package is important because of its text/string manipulation capabilities. The haven package will only be used to upload SPSS files into R and will be removed almost immediately.
+
+```{r}
+library(tidyverse)
+library(stringr)
+library(haven)
+
+chl_achievement_11 <- read_sas('bsachlm5.sas7bdat')
+kor_achievement_11 <- read_spss('bsakorm5.sav')
+ltu_achievement_11 <- read_spss('bsaltum5.sav')
+usa_achievement_11 <- read_spss('bsausam5.sav')
+
+detach(package:haven)
+```
+
+We will also need to upload the achievement codebook. However, we do not want all the information in the codebook so we will need to parse it down to only columns which provide important information. These columns are: **FIELD_NAME**, **FIELD_LABL**, **MEAS_CLASS**, and **COMMENT1**. **FIELD_NAME** provides the id for each question asked, **FIELD_LABL** is a very brief summary of what each question asks, **MEAS_CLASS** provides the answer of each multiple choice question ('M1' for 'A', 'M2' for 'B', 'M3' for 'C', and 'M4' for 'D') or 'SA' for each free response question, and  **COMMENT1** provides the cognitive and content domain for each question.
+
+```{r}
+achievement_codebook_11 <- read_tsv('bsatmsm5.csv') %>%
+  select(FIELD_NAME, FIELD_LABL, MEAS_CLASS, COMMENT1) %>%
+  mutate(MEAS_CLASS = str_replace(MEAS_CLASS, '^M', '')) %>%
+  separate(COMMENT1, into = c('content_domain', 'cognitive_domain'), sep = '\\\\') %>%
+  mutate(cognitive_domain = str_extract(cognitive_domain, '\\w+')) %>%
+  mutate(question_type = sapply(MEAS_CLASS, function(x){
+    if(str_detect(x, '\\d')){
+      'Multiple Choice'
+    } else if (str_detect(x, 'SA|DPC_D')){
+      'Free Response'
+    } else {
+      'Other'
+    }
+  }))
+```
+
+The student achievement datasets are organized so that each student is represented by one row and each question is represented by one column. The datasets could be described as being in the **wide format**. The datasets include both math and science questions as well as student performance scores, school and student IDs, gender, and test information. Math questions are columns which begin with an 'M' and science questions are columns which begin with an 'S'. We want to clean and manipulate the data so we have data we can visualize. Below is a stepwise algorithm of how to do so:
+
+1. Get rid of all irrelevent columns. This is done by **SELECT**ing only the relevent columns with a **regular expression**.
+2. We want to switch from **wide format** to **long format** by combining every question column into a single question column and by creating an answer column which receives the corresponding values. This is done by **gather**ing the question columns with another **regular expression**.
+3. All the questions are divided into 14 different testbooks so no student is asked all questions. However, due to the nature of the dataset, every student row had a every question column. Now that we have all questions in a single question column, we can get rid of all the useless information by **FILTER**ing out any answer that has an **NA** value. By doing so, we end up completely erasing about 30 students who answered no questions. 
+4. There are 5 benchmark columns given by 5 different officials. These scores are better expressed as **FACToR**s  and should be treated as such. I created a new column that represents the average score as a **CHARACTER**. This is done by using **MUTATE** to create a new column and **SAPPLY** to decide whether the new column should conatin 'Advanced', 'High', 'Interediate', 'Low', or 'Below Low'.
+5. We need to count the number of students who were given a particular question. We can't simply **FILTER** for the question because we removed all **NA** answers. If a student didn't answer a question then that student would not missing from the count. However, we do know that each book has a seperat set of questions and every student responded to at least one question in the book. So what we need to do is find out what questions were given in each book, then we need to find out which book was given to each student. We can do this by using the incredibly powerful combination of **GROUP_BY** and **NEST**. 
+  +This step needs to be repeated for girls `ITSEX == 1`
+  +This step needs to be repeated for boys `ITSEX == 2'
+6. We now need to combine the achievement datasets with the codebook. This can be done by **LEFT_JOIN**ing the codebook to the achievement dataset. 
+7. We make use of the added data to determine whether or not a student gave the correct answer. If the question is multiple choice, then we see if the student's answer matches the actual answer. If the question is free-response, then we code the student's answer as correct if **MEAS_CLASS** is greater than 10. There are times when a score greater than 10, but less than 20 means the student received patial credit, however we are going to give the student the benefit of the doubt and code the student's answer as correct. 
+
+1. The dataframe should only contain relevent columns. The columns of interest are any columns that begin with the letter 'M' which represent student responses to a particular math question, any columns that begin with 'BSM' which represent different math performance scores different researchers gave to each student, and the identification variables such as 'IDSTUD', 'IDBOOK', and 'ITSEX' which represent a particular student's test ID, which of the the 14 testbooks the student was given, and the student's gender. This can be done by combining **dplyr**'s non-standard evaluation and data manipulation capabilites as well as **stringr**'s regex capabilites. The questions should be combined into a single column and their values should be combined into another column so that each row has a single STUDENTID|question|answer combination - a process often referred to as going 'from wide to long format'. This can be done done by using **tidyr**'s reshaping capabilites. Finally, we want to get rid of all NA values in the answer column. NA values represent either questions that the student wasn't given or questions that the student wasn't able to respond to. We will see later that removing questions that a student was given, but did not answer, will not affect the analysis.
+
+```{r}
+grab_math_questions <- function(df){
+  df %>%
+    #^M grabs all the math questions
+    #^BSM grabs all the benchmark scores
+    select_(.dots = names(.)[str_detect(names(.), '^M|IDSTUD|IDBOOK|IDSCHOOL|ITSEX|^BSM')]) %>%
+    gather_('question', 'answer', names(.)[str_detect(names(.), '^M')]) %>% 
+    #about 30 students who responded NA to everything will disappear
+    #by getting rid of these students I end up having the same number of students per question as the almanac
+    filter(!is.na(answer))}
+```
+
+2. The performance scores, also known as benchmark scores, should be very similiar to eachother. Multiple researchers are given the task of scoring the students so that the student is given as accurate of a score as possible. These scores should be averaged so that there is only one score per student. Furthermore, the performance score will only be used to identify whether the student performed at an advanced, high, intermediate, low, or below low level. A new column explicitly stating the student's performance level should be created. An anonymou **if-else** function along with **sapply** can be used to assign a performance level to each student.
+
+This portion of the cleaned dataset won't be used for data visualization, however, it will be useful for other articles which will use the cleaned dataset from this article. 
+
+```{r}
+get_performance_score <- function(df){
+  df %>%
+    mutate(benchmark_math_avg = (BSMMAT01 + BSMMAT02 + BSMMAT03 + BSMMAT04 + BSMMAT05)/5) %>%
+    mutate(benchmark_math_avg_value = sapply(benchmark_math_avg, function(x){
+      if(x >= 625){
+        'Advanced'
+      } else if (x > 550) {
+        'High'
+      } else if (x > 475) {
+        'Intermediate'
+      } else if (x > 400) {
+        'Low International'
+      } else {
+        'Below Low'
+      }
+    }))}
+
+```
+
+3. Book level information must be extracted before attempting to extract question level information. The first function deleted NA values, potentially deleting a STUDENTID|question combination for a student who was given a question, but was unable to answer that question. The total number of students who were given a question can be derived by filtering for unique question|BOOKID combinations, which in turn can be combined with unique STUDENTID|BOOKID combinations to determine which questions were provided to which students. This can be done by using the powerful **nest** and **lapply** combination. The **nest** function creates a column named 'data' which is a dataframe of all selected columns. This is done by filtering all selected columns to unique variables in the unselected column or columns. This 'data' column, once created, can be iterated over with an anonymous function passed to **lapply**. 
+
+```{r}
+
+get_book_info <- function(df){
+  df %>%
+    group_by(IDBOOK) %>% 
+    nest() %>%
+    mutate(
+      students_per_book = lapply(seq_along(.$data), function(i){
+        .$data[[i]] %>% 
+          group_by(IDSTUD) %>%
+          count() %>%
+          nrow()
+      }) %>% 
+        unlist()) %>%
+    mutate(
+      students_per_book_female = lapply(seq_along(.$data), function(i){
+        .$data[[i]] %>% 
+          group_by(IDSTUD, ITSEX) %>%
+          count() %>%
+          filter(ITSEX == 1) %>%
+          nrow()
+      }) %>%
+        unlist()) %>%
+    mutate(
+      students_per_book_male = lapply(seq_along(.$data), function(i){
+        .$data[[i]] %>%
+          group_by(IDSTUD, ITSEX) %>%
+          count() %>%
+          filter(ITSEX == 2) %>%
+          nrow()
+      }) %>%
+        unlist()) %>%
+    unnest()}
+```
+
+4. The current dataframe identifies which questions were given to each student and it also provides each student's response to the questions, however it does not provide the correct response to each question. Luckily, for free-response questions, the student's answer is coded so that a number greater than or equal to 20 is correct and a number greater than or equal to 10 is either fully or partially correct. The answers to the multiple choice questions can be found in the `achivement_codebook_11` dataframe created earlier in the **MEAS_CLASS** column. The two dataframes can be combined by using `dplyr`'s table joing capabilites. New information joined into the dataframe should be cleaned for analysis.
+
+```{r}
+combine_datasets <- function(df, cdbook){
+  df %>%
+    left_join(cdbook, by = c('question' = 'FIELD_NAME')) %>%
+    #for open ended questions answers in the 20s are all correct however, those in the 10s can either be partially correct or fully correct
+    #until I can figure out how to parse the two, I will mark them all as correct
+    #for multiple choice the correct answer is stored in the 'MEAS_CLASs' variable
+    mutate(
+      student_gave_correct_answer = lapply(seq_along(.$MEAS_CLASS), function(i){
+        if(.$MEAS_CLASS[i] %in% 1:4){
+          .$MEAS_CLASS[i] == .$answer[i]
+        } else {
+          str_detect(.$answer[i], '^[12]')
+        }}) %>%
+        unlist()) %>%
+    #maybe I can figure out the open ended problems with the correct answers derived from $FIELD_LABL
+    mutate(
+      correct_answer_derived_from_labl = FIELD_LABL %>% 
+        str_extract( '\\(\\d\\)|\\(\\w\\)')
+    ) %>%
+    mutate(
+      FIELD_LABL = FIELD_LABL %>%
+        str_replace(' \\(\\d\\)|\\(\\w\\)', '')
+    )}
+```
+
+5. Question-level information now can be extracted because the correct answer to each question is known, the total number of students given the question is known, and the student's answer to the question is known. This can be done by using the `nest()` and `lapply()` combination used in function #3.
+
+```{r}
+get_question_info <- function(df){
+  df %>%  
+    group_by(question) %>%
+    nest() %>%
+    mutate(
+      students_per_question = lapply(seq_along(.$data), function(i){
+        .$data[[i]] %>% 
+          group_by(IDBOOK, students_per_book) %>% 
+          count() %>%
+          .$students_per_book %>%
+          sum()
+      }) %>%
+        unlist()) %>%
+    mutate(
+      students_per_question_female = lapply(seq_along(.$data), function(i){
+        .$data[[i]] %>%
+          group_by(IDBOOK, students_per_book_female) %>%
+          count() %>%
+          .$students_per_book_female %>%
+          sum()
+      }) %>%
+        unlist()) %>%
+    mutate(
+      students_per_question_male = lapply(seq_along(.$data), function(i){
+        .$data[[i]] %>%
+          group_by(IDBOOK, students_per_book_male) %>%
+          count() %>%
+          .$students_per_book_male %>%
+          sum()
+      }) %>%
+        unlist()) %>%
+    #according to the math_itemalmanac I am off by about 5% fo each question
+    #but I actually think that the almanac is wrong
+    #at least when I compare the percent of each response for the multiple choice
+    #another posibility is that there was some kind of mix up with regards to the
+    #conversion of SAS/SPSS to R
+    mutate(
+      correct_ratio_per_question = lapply(seq_along(.$data), function(i){
+        tot_students  = .$students_per_question[i]
+        .$data[[i]] %>%
+          filter(student_gave_correct_answer) %>%
+          nrow()/tot_students
+      }) %>% 
+        unlist()) %>%
+    mutate(
+      correct_ratio_per_question_female = lapply(seq_along(.$data), function(i){
+        tot_female = .$students_per_question_female[i]
+        .$data[[i]] %>%
+          filter(student_gave_correct_answer, ITSEX == 1) %>%
+          nrow()/ tot_female
+      }) %>% 
+        unlist()) %>%
+    mutate(
+      correct_ratio_per_question_male = lapply(seq_along(.$data), function(i){
+        tot_male = .$students_per_question_male[i]
+        .$data[[i]] %>%
+          filter(student_gave_correct_answer, ITSEX == 2) %>%
+          nrow()/ tot_male
+      }) %>%
+        unlist()) %>%
+    unnest()}
+```
+
+Now that the functions used to clean the data are created, they can be used to actually clean the data. To prevent needless typing, all 5 functions are contained in a wrapper function. This cleaned data will be used in further projects as well. 
+
+```{r}
+clean_math <- function(df, cdbook){
+  df %>%
+    grab_math_questions() %>%
+    get_performance_score() %>%
+    get_book_info() %>%
+    combine_datasets(cdbook) %>%
+    get_question_info()}
+
+chl_timss_math_11 <- clean_math(chl_achievement_11, achievement_codebook_11)
+ltu_timss_math_11 <- clean_math(ltu_achievement_11, achievement_codebook_11)
+kor_timss_math_11 <- clean_math(kor_achievement_11, achievement_codebook_11)
+usa_timss_math_11 <- clean_math(usa_achievement_11, achievement_codebook_11)
+
+```
+
+## Visualization
+
+A seperate smaller dataframe will be created specifically for graphing. It will contain only data useful for graphing and will also create columns to have more control of `ggplot()`.
+
+```{r}
+basic_graph_setup <- function(math_df, country){
+  math_df %>%
+    group_by(question, students_per_question, correct_ratio_per_question, correct_ratio_per_question_female,
+             correct_ratio_per_question_male, FIELD_LABL, content_domain, cognitive_domain, question_type) %>%
+    nest() %>%
+    arrange(desc(correct_ratio_per_question)) %>%
+    mutate(question_rank = 1:nrow(.)) %>%
+    mutate(country = country) %>%
+    mutate(diff_male_female = correct_ratio_per_question_male - correct_ratio_per_question_female) %>%
+    mutate(dominant_gender = sapply(.$diff_male_female, function(x){
+      if(x >0) {
+        'Male'
+      } else if(x<0){
+        'Female'
+      } else {
+        'Tie'
+      }
+    }))
+}
+
+chl_basic_graph_info <- basic_graph_setup(chl_timss_math_11, 'Chile')
+ltu_basic_graph_info <- basic_graph_setup(ltu_timss_math_11, 'Lithuania')
+kor_basic_graph_info <- basic_graph_setup(kor_timss_math_11, 'Korea')
+usa_basic_graph_info <- basic_graph_setup(usa_timss_math_11, 'USA')
+
+international_basic_graph_info <- rbind(chl_basic_graph_info, ltu_basic_graph_info, kor_basic_graph_info, usa_basic_graph_info)
+```
+
+Make a bar plot with `geom_col()`
+
+```{r}
+ggplot(international_basic_graph_info, aes(question_rank, diff_male_female)) +
+  geom_col(aes(fill = dominant_gender)) +
+  scale_y_continuous(limits = c(-.15, .15)) +
+  facet_wrap(~country) +
+  labs(x = 'Questions Ranked From Easiest to Hardest According to Country',
+       y = 'Males Correct Ratio - Females Correct Ratio',
+       fill = 'Gender',
+       title = 'Gender Comparison Within Countries',
+       subtitle = 'Bar Plot')
+```
+
+Make a scatter-text plot with `geom_text()`. Unfortunately, the graph seems overly clustered and there is not much gained by plotting the actually question id.
+
+```{r}
+ggplot(international_basic_graph_info, aes(correct_ratio_per_question, diff_male_female)) +
+  geom_text(aes(label = question, color = dominant_gender)) +
+  facet_wrap(~country) +
+  labs(x = 'n Students Who Correctly Answered Question / Total Students',
+       y = 'Males Correct Ratio - Females Correct Ratio',
+       color = 'Gender',
+       title = 'Gender Comparison Within Countries',
+       subtitle = 'Scatter-Text Plot')
+```
+
+It is worth exploring the scatter plot format. The `gridExtra` package provides the ability to combine graphs into one. A combination of scatter plot and density plots might be useful. 
+
+```{r}
+get_legend<-function(myggplot){
+  tmp <- ggplot_gtable(ggplot_build(myggplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)
+}
+
+
+combomain <- ggplot(international_basic_graph_info, aes(correct_ratio_per_question, diff_male_female)) +
+  geom_point(aes(color = country), size = 3, alpha = 1/3) +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = .5) +
+  labs(x = 'n Students Who Correctly Answered Question / Total Students',
+       y = 'Males Correct Ratio - Females Correct Ratio',
+       color = NULL)
+
+combolegend <- get_legend(combomain)
+
+combomain <- combomain +
+  theme(legend.position = 'none')
+
+blank_graph <-  list(
+  labs(x = NULL, y = NULL, color = NULL),
+  theme(legend.position = 'none',
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(), 
+        axis.text.y = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        plot.background = element_blank(), 
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(),
+        panel.background = element_blank()) 
+)
+  
+
+combotop = ggplot(international_basic_graph_info, aes(correct_ratio_per_question, color = country, fill = country)) +
+  geom_density(alpha = .25) + 
+  labs(title = 'Gender and Correct Ratio Comparison of All Countries',
+       subtitle = 'Scatter and Density Combination Plot') +
+  blank_graph
+
+comboright = ggplot(international_basic_graph_info, aes(diff_male_female, color = country, fill = country)) +
+  geom_density(alpha = .25) +
+  coord_flip() +
+  blank_graph
+
+library(gridExtra)
+
+grid.arrange(combotop, combolegend, combomain, comboright, 
+             ncol=2, nrow=2, widths=c(4, 1.4), heights=c(1.4, 4))
+
+detach(package:gridExtra)
+```
+
+Perhaps looking at domain information will be useful. 
+
+```{r}
+ggplot(international_basic_graph_info, aes(question_rank, correct_ratio_per_question)) +
+  geom_col(aes(fill = content_domain)) +
+  scale_y_continuous(limits = c(0,1 )) +
+  facet_wrap(~country) +
+  labs(x = 'Questions Ranked From Easiest to Hardest According to Country',
+       y = 'n Students Who Correctly Answered Question / Total Students', 
+       fill = 'Content Domain',
+       title = 'Content Domain Comparison of Countries', 
+       subtitle = 'Barplot')
+
+
+ggplot(international_basic_graph_info, aes(question_rank, correct_ratio_per_question)) +
+  geom_col(aes(fill = cognitive_domain)) +
+  scale_y_continuous(limits = c(0,1)) +
+  facet_wrap(~country) +
+  labs(x = 'Questions Ranked From Easiest to Hardest According to Country',
+       y = 'n Students Who Correctly Answered Question / Total Students', 
+       fill = 'Cognitive Domain',
+       title = 'Cognitive Domain Comparison of Countries', 
+       subtitle = 'Barplot')
+```
+
+Maybe a simpler boxplot will be more informative...
+
+```{r}
+international_domain <- international_basic_graph_info %>%
+  group_by(question, cognitive_domain, content_domain) %>%
+  nest() %>%
+  gather(type, domain, -c(question, data)) %>% 
+  unnest()
+
+ggplot(international_domain, aes(domain, diff_male_female)) +
+  geom_boxplot(aes(color = country)) +
+  geom_hline(yintercept = 0) +
+  labs(x = 'Domain',
+       y = 'Difference Between Correction Rate (Male - Female)',
+       color = 'Country',
+       title = 'TIMSS: Comparison of Male and Female Respone Per Domain',
+       subtitle = 'Boxplot')
+```
+
+A scatterplot seems to be the most interesting...
+
+```{r}
+ggplot(international_basic_graph_info, aes(correct_ratio_per_question, diff_male_female)) +
+  geom_point(aes(color = content_domain, shape = cognitive_domain), position = 'jitter') +
+  facet_wrap(~country) +
+  labs(x = 'n Students Who Correctly Answered Question / Total Students',
+       y = 'Males Correct Ratio - Females Correct Ratio',
+       color = 'Gender',
+       title = 'Gender Comparison Within Countries',
+       subtitle = 'Scatter-Text Plot')
+```
+
+A network graph connects nodes of similiar information to eachother. If the nodes of each country are ordered by rank, then the network graph can help show the differences in country responses to any particular question. `igraph` is a great package, but I ended up using `ggplot()` because the below node graph was simple enough to create. 
+
+```{r}
+network_graph_setup <- function(basic_graph, str_abr, link1, link2, from_top){
+  basic_graph %>%
+    select(-data) %>%
+    mutate(id = str_c(str_abr, '_', question)) %>%
+    mutate(link1 = link1) %>%
+    mutate(link2 = link2) %>%
+    mutate(order = from_top)
+}
+
+chl_network <- network_graph_setup(chl_basic_graph_info, 'chl', 'chl_ltu', 'bottom', 4)
+
+ltu_network <- network_graph_setup(ltu_basic_graph_info, 'ltu', 'ltu_usa', 'chl_ltu', 3)
+usa_network <- network_graph_setup(usa_basic_graph_info, 'usa', 'usa_kor', 'ltu_usa', 2)
+kor_network <- network_graph_setup(kor_basic_graph_info, 'kor', 'top', 'usa_kor', 1)
+
+international_nodes <- rbind(chl_network, ltu_network, usa_network, kor_network) %>%
+  group_by(country, link1, link2) %>%
+  nest() %>%
+  gather(link_type, link, -c(data, country)) %>%
+  unnest() %>%
+  mutate(link = str_c(question, '_', link)) %>%
+  arrange(order, question_rank) %>%
+  mutate(country = factor(country, levels = unique(country), ordered = T)) %>%
+  mutate(FIELD_LABL = str_to_title(FIELD_LABL)) %>%
+  mutate(content_domain = str_to_title(content_domain)) %>%
+  mutate(cognitive_domain = str_to_title(cognitive_domain))
+
+ggplot(international_nodes, aes(question_rank, country, color = correct_ratio_per_question)) +
+  geom_point(size = 2) +
+  scale_color_gradient2(high = 'forestgreen', mid = 'yellow', low = 'saddlebrown', midpoint = .5) +
+  geom_line(aes(group = as.factor(link)), color = 'grey80') +
+  labs(x = 'Question Rank: From easiest to hardest',
+       y = 'Country',
+       color = 'Question Correct Ratio',
+       title = 'TIMSS: Comparison of Country Correct Response Per Question',
+       subtitle = 'Bi-Partite Network Graph') 
+
+```
