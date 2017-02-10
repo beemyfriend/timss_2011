@@ -325,7 +325,18 @@ ggplot(international_domain, aes(domain, diff_male_female)) +
        y = 'Difference Between Correction Rate (Male - Female)',
        color = 'Country',
        title = 'TIMSS: Comparison of Male and Female Respone Per Domain',
-       subtitle = 'Boxplot')
+       subtitle = 'Boxplot') +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0))
+
+ggplot(international_domain, aes(domain, correct_ratio_per_question)) +
+  geom_boxplot(aes(color = country)) +
+  geom_hline(yintercept = 0.5) +
+  labs(x = 'Domain',
+        y = 'n Students Who Correctly Answered Question / Total Students',
+        color = 'Country',
+        title ='TIMSS: Correct Response Rate Per Domain',
+        subtitle = 'Boxplot') +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0))
 
 ggplot(international_basic_graph_info, aes(correct_ratio_per_question, diff_male_female)) +
   geom_point(aes(color = content_domain, shape = cognitive_domain), position = 'jitter') +
