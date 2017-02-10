@@ -3,7 +3,7 @@ title: "Cleaning and Visualizing 2011 TIMSS Question Level Data With R"
 author: "BeeMyFriend"
 date: 'February 10, 2017'
 output:
-  md_document:
+  html_document:
     toc: true
     toc_depth: 3
 ---
