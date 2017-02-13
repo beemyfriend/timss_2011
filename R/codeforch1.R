@@ -177,7 +177,6 @@ get_question_info <- function(df){
 clean_math <- function(df, cdbook){
   df %>%
     grab_math_questions() %>%
-    get_performance_score() %>%
     get_book_info() %>%
     combine_datasets(cdbook) %>%
     get_question_info()}
@@ -188,6 +187,7 @@ ltu_timss_math_11 <- clean_math(ltu_achievement_11, achievement_codebook_11)
 kor_timss_math_11 <- clean_math(kor_achievement_11, achievement_codebook_11)
 usa_timss_math_11 <- clean_math(usa_achievement_11, achievement_codebook_11)
 
+write_csv(chl_timss_math_11, '2011_TIMSS_CHILE.csv')
 
 basic_graph_setup <- function(math_df, country){
   math_df %>%
