@@ -297,9 +297,10 @@ timss_student_svm <- function(model){
 svm_model_simple <- analyze_model(chile_simple_student_11, timss_student_svm)
 svm_model_simple_adjusted <- analyze_model(chile_simple_student_adjusted_11, timss_student_svm)
 
-prep_for_svm <- function(df){
+prep_for_svm <- function(df, cols2ignore){
   svm_factors <- df %>%
-    select(-IDSTUD, -ITSEX, -benchmark_math_avg_value) %>%
+    select_(.dots = names(.)[!names(.) %in% cols2ignore]) %>%
+#    select(-IDSTUD, -ITSEX, -benchmark_math_avg_value) %>%
     Filter(f = is.factor) %>%
     names()
   
@@ -314,8 +315,106 @@ prep_for_svm <- function(df){
   df
 }
 
-chile_student_school_11_svmprep <- prep_for_svm(chile_student_school_11)
+chile_student_school_11_svmprep <- prep_for_svm(chile_student_school_11, c('IDSTUD', 'ITSEX', 'benchmark_math_avg_value'))
 svm_model_student_school <- analyze_model(chile_student_school_11_svmprep, timss_student_svm)
-svm_model_student_school_adjusted <- analyze_model(prep_for_svm(chile_student_school_adjusted_11), timss_student_svm)
+svm_model_student_school_adjusted <- analyze_model(prep_for_svm(chile_student_school_adjusted_11, c('IDSTUD', 'ITSEX', 'benchmark_math_avg_value')), timss_student_svm)
+
+str(chile_student_teacher_11)
+svm_model_student_teacher <- analyze_model(prep_for_svm(chile_student_teacher_11, c('IDSTUD', 'ITSEX', 'benchmark_math_avg_value')), timss_student_svm)
+svm_model_student_teacher_adjusted <- analyze_model(prep_for_svm(chile_student_teacher_adjusted_11, c('IDSTUD', 'ITSEX', 'benchmark_math_avg_value')), timss_student_svm)
+
+str(chile_student_student_11)
+svm_model_student_student <- analyze_model(prep_for_svm(chile_student_student_11, c('IDSTUD', 'ITSEX', 'benchmark_math_avg_value', 'IDSCHOOL')), timss_student_svm)
+svm_model_student_student_adjusted <- analyze_model(prep_for_svm(chile_student_student_adjusted_11, c('IDSTUD', 'ITSEX', 'benchmark_math_avg_value', 'IDSCHOOL')), timss_student_svm)
+
+str(chile_all_11)
+svm_model_all <- analyze_model(prep_for_svm(chile_all_11, c('IDSTUD', 'ITSEX', 'benchmark_math_avg_value')), timss_student_svm)
+svm_model_all_adjusted <- analyze_model(prep_for_svm(chile_all_11_adjusted, c('IDSTUD', 'ITSEX', 'benchmark_math_avg_value')), timss_student_svm)
+
+detach(e1071)
+
+#==================================================================================#
+#============================ Trees ===============================================#
+#==================================================================================#
+
+library(tree)
+library(randomForest)
+
+#require(Amelia)
+#missmap(timss_all_model_11)
+#trees can't have any factors with more than 32 levels()
+#needs to be even numbered rows for future comparison
+set.seed(1)
+tree_model = chile_all_11 %>%
+  select(-IDSCHOOL) %>%
+  .[sample(1:(nrow(.)-1)),]
 
 
+tree.timss = tree(benchmark_math_avg_value~.-IDSTUD, data = tree_model)
+summary(tree.timss)
+plot(tree.timss)
+text(tree.timss, pretty=0)
+
+train <- sample(1:nrow(tree_model), nrow(tree_model)*3/4)
+timss_tree_test <- tree_model[-train,]
+test_benchmark <- tree_model$benchmark_math_avg_value[-train]
+tree.timss <- tree(benchmark_math_avg_value~.-IDSTUD, data = tree_model, subset = train)
+tree.pred = predict(tree.timss, timss_tree_test, type = 'class')
+table(tree.pred, test_benchmark)
+
+
+cv.timss <- cv.tree(tree.timss, FUN = prune.misclass)
+#dev is cross validation error. smaller cv corresponds to ideal size
+cv.timss
+prune.timss = prune.misclass(tree.timss, best = 3)
+plot(prune.timss)
+text(prune.timss, pretty = 0)
+
+tree.pred = predict(prune.timss, timss_tree_test, type = 'class')
+#worst still...
+table(tree.pred, test_benchmark)
+
+summary(tree.timss)
+
+
+set.seed(2)
+#mtry = number of predictors we should try
+bag.timss <- randomForest(benchmark_math_avg_value~.-IDSTUD, 
+                          data = tree_model, 
+                          subset = train, mtry=36, 
+                          importance=T)
+bag.timss
+
+yhat.bag = predict(bag.timss, newdata = tree_model[-train,])
+plot(yhat.bag, timss_tree_test$benchmark_math_avg_value)
+
+bag.timss = randomForest(benchmark_math_avg_value~.-IDSTUD,
+                         data = tree_model,
+                         subset = train,
+                         mtry = 36,
+                         ntree=25)
+yhat.bag = predict(bag.timss, newdata = tree_model[-train,])
+
+table(yhat.bag,timss_tree_test$benchmark_math_avg_value)
+
+rf.timss = randomForest(benchmark_math_avg_value~.-IDSTUD,
+                        data = tree_model,
+                        subset = train,
+                        mtry = 18,
+                        importance = T)
+yhat.rf = predict(rf.timss, newdata = tree_model[-train,])
+table(yhat.rf, timss_tree_test$benchmark_math_avg_value)
+importance(rf.timss)
+varImpPlot(rf.timss)
+
+library(gbm)
+boost.timss <- gbm(benchmark_math_avg_value~.-IDSTUD,
+                   data = tree_model[train,],
+                   distribution = 'gaussian',
+                   n.trees = 5000,
+                   interaction.depth = 4)
+summary(boost.timss)
+yhat.boost = predict(boost.timss, 
+                     newdata = tree_model[-train,], 
+                     n.trees = 5000)
+table(yhat.boost, timss_tree_test$benchmark_math_avg_value)
