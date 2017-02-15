@@ -88,30 +88,56 @@ require(caret)
 
 #----------------------------- Student Level -----------------------------------------#
 
-timss_student_nb <- function(model){
-  x <- model %>%
+timss_student_nb <- function(df){
+  clean_df <- df %>%
     dplyr::select(-c(benchmark_math_avg_value, IDSTUD))
   
-  truth <- model$benchmark_math_avg_value %>%
+  truth <- df$benchmark_math_avg_value %>%
     as.factor()
   
-  model <- train(x, truth, 'nb', trControl = trainControl(method = 'cv', number = 10))
+  model <- train(clean_df, truth, 'nb', trControl = trainControl(method = 'cv', number = 10))
   
-  prediction <- predict(model$finalModel, x)
+  prediction <- predict(model$finalModel, clean_df)
   ed_guess <- prediction$class
+  
   table(ed_guess, truth)
 }
 
-timss_student_nb(chile_simple_student_11)
+analyze_model <- function(df, model_func){
+  model_table <- model_func(df)
+  model_info <- list()
+  model_info[[1]] = model_table
+  
+  correct_in_col <- c()
+  total_in_col <- c()
+  correct_ratio <- c()
+  
+  for(i in 1:ncol(model_table)){
+    correct_in_col[i] = model_table[i,i]
+    total_in_col[i] = model_table[,i] %>%
+      sum()
+    correct_ratio[i] = str_c(dimnames(model_table)[[1]][i], ': ', round((100 * correct_in_col[i]/total_in_col[i]), 2), '%')
+  }
+  correct_ratio_mean <- mean(correct_in_col/total_in_col)
+  correct_ratio[length(correct_ratio) + 1] = str_c('Overall: ',round((100 * sum(correct_in_col)/sum(total_in_col)), 2), '%')
+  model_info[[2]] = c(correct_in_col/total_in_col, sum(correct_in_col)/sum(total_in_col))
+  model_info[[3]] = correct_ratio
+  
+  guess_table <- table(df$benchmark_math_avg_value, df$benchmark_math_avg_value)
+  model_info[[4]] = guess_table
+  model_info[[5]] = max(total_in_col)/sum(total_in_col)
+  model_info[[6]] = str_c('Just guessing \'', dimnames(model_table)[[1]][which.max(total_in_col)], '\': ', round((100 * max(total_in_col)/sum(total_in_col)), 2),'%')
+  model_info[[7]] = correct_ratio_mean
+  names(model_info) <- c('confusion_matrix', 'accuracy', 'accuracy_explained', 'truth_matrix', 'optimized_single_guess','optimized_single_guess_explained', 'correct_ratio_mean')
+  model_info
+}
+
+nb_model_simple <-  timss_student_nb(chile_simple_student_11)
 #nb for chile_2011 is 57.35 ; Random guessing is 20 ; choosing only 'Below Low International' is 37.74
-(0 + 1679 + 163 + 526 + 961)/nrow(chile_simple_student_11)
-table(chile_simple_student_11$benchmark_math_avg_value, chile_simple_student_11$benchmark_math_avg_value)
-(2191)/nrow(chile_simple_student_11)
 
 #Let's just see what IDSCHOOL performs without ITSEX
 ##57.17 It turns out that using gender is helpful, but doesn't make a huge difference
-timss_student_nb(chile_simple_student_11 %>% dplyr::select(-ITSEX))
-(0 + 1650 + 163 + 532 + 974)/nrow(chile_simple_student_11)
+nb_model_simple_sexless <- timss_student_nb(chile_simple_student_11 %>% dplyr::select(-ITSEX))
 
 #let's try the first model (just ITSEX and IDSCHOOL), but combine andvanced with high and combine low with below low
 adjust_student_benchmark <- function(x){
@@ -129,10 +155,7 @@ chile_simple_student_adjusted_11 <- chile_simple_student_11 %>%
   mutate(benchmark_math_avg_value = adjust_student_benchmark(benchmark_math_avg_value))
 
 #nb model is 78.03 ; guessing is about 33.33 ; choosing just 'Low International' is 70.27
-timss_student_nb(chile_simple_student_adjusted_11)
-(219 + 452 + 3859)/nrow(chile_simple_student_adjusted_11)
-table(chile_simple_student_adjusted_11$benchmark_math_avg_value, chile_simple_student_adjusted_11$benchmark_math_avg_value)
-(4079)/nrow(chile_simple_student_adjusted_11)
+nb_model_simple_adjusted <- timss_student_nb(chile_simple_student_adjusted_11)
 
 chile_student_school_11 <- chile_simple_student_11 %>%
   mutate(IDSCHOOL = as.double(IDSCHOOL)) %>%
@@ -147,19 +170,13 @@ chile_student_school_11 <- chile_simple_student_11 %>%
   ungroup()
 
 #48.69 ; random guess is 20;just low is 33.11
-timss_student_nb(chile_student_school_11)
-(0 + 600 + 181 + 106 + 585)/nrow(chile_student_school_11)
-table(chile_student_school_11$benchmark_math_avg_value, chile_student_school_11$benchmark_math_avg_value)
-1001/nrow(chile_student_school_11)
+nb_model_student_school <- timss_student_nb(chile_student_school_11)
 
 chile_student_school_adjusted_11 <- chile_student_school_11 %>%
   mutate(benchmark_math_avg_value = adjust_student_benchmark(benchmark_math_avg_value))
 
 #69.96; random guess 33.33; 66.16 just guessing low
-timss_student_nb(chile_student_school_adjusted_11)
-(203 + 70 + 1842)/nrow(chile_student_school_adjusted_11)
-table(chile_student_school_adjusted_11$benchmark_math_avg_value, chile_student_school_adjusted_11$benchmark_math_avg_value)
-(2000)/nrow(chile_student_school_adjusted_11)
+nb_model_student_school_adjusted <- timss_student_nb(chile_student_school_adjusted_11)
 
 chile_student_teacher_11 <- chile_simple_student_11 %>%
   mutate(IDSCHOOL = as.double(IDSCHOOL)) %>%
@@ -174,19 +191,13 @@ chile_student_teacher_11 <- chile_simple_student_11 %>%
   ungroup() 
 
 #46.62; 20; 33.82 below low
-timss_student_nb(chile_student_teacher_11)  
-(14 + 858 + 154 + 239 + 439)/nrow(chile_student_teacher_11)
-table(chile_student_teacher_11$benchmark_math_avg_value, chile_student_teacher_11$benchmark_math_avg_value)
-(1235)/nrow(chile_student_teacher_11)
+nb_model_student_teacher <- timss_student_nb(chile_student_teacher_11)  
 
 chile_student_teacher_adjusted_11 <- chile_student_teacher_11 %>%
   mutate(benchmark_math_avg_value = adjust_student_benchmark(benchmark_math_avg_value))
 
 #69.96; 33.33; 67.61
-timss_student_nb(chile_student_teacher_adjusted_11)
-(192 + 223 + 2142)/nrow(chile_student_teacher_adjusted_11)
-table(chile_student_teacher_adjusted_11$benchmark_math_avg_value, chile_student_teacher_adjusted_11$benchmark_math_avg_value)
-(2471)/nrow(chile_student_teacher_adjusted_11)
+nb_model_student_teacher_adjusted <- timss_student_nb(chile_student_teacher_adjusted_11)
 
 chile_student_student_11 <- chile_simple_student_11 %>%
   mutate(IDSTUD = IDSTUD %>% as.character() %>% as.numeric()) %>%
@@ -201,31 +212,60 @@ chile_student_student_11 <- chile_simple_student_11 %>%
   ungroup()
 
 #45.25; 20; 34.36 below low
-timss_student_nb(chile_student_student_11)
-(0 + 1142 + 288 + 32 + 717)/nrow(chile_student_student_11)
-table(chile_student_student_11$benchmark_math_avg_value, chile_student_student_11$benchmark_math_avg_value)
-1655/nrow(chile_student_student_11)
+nb_model_student_student <- timss_student_nb(chile_student_student_11)
 
 chile_student_student_adjusted_11 <- chile_student_student_11 %>%
   mutate(benchmark_math_avg_value = adjust_student_benchmark(benchmark_math_avg_value))
 
 #71.76; 33.33; 67.96 low
-timss_student_nb(chile_student_student_adjusted_11)
-(339 + 348 + 2769)/nrow(chile_student_student_adjusted_11)
-table(chile_student_student_adjusted_11$benchmark_math_avg_value, chile_student_student_adjusted_11$benchmark_math_avg_value)
-3273/nrow(chile_student_student_adjusted_11)
+nb_model_student_student_adjusted <- timss_student_nb(chile_student_student_adjusted_11)
 
-chile_all_11 <- chile_simple_student_11 %>%
-  mutate(IDSTUD = IDSTUD %>% as.character() %>% as.numeric()) %>%
-  mutate(IDSCHOOL = as.double(IDSCHOOL)) %>%
-  left_join(chile_student_general_11) %>%
-  left_join(chile_teacher_general_11) %>%
-  left_join(chile_school_general_11) 
+chile_student_student_111 <- chile_student_student_11 %>%
+  mutate_all(as.character) %>%
+  dplyr::select(-benchmark_math_avg_value, -ITSEX, -IDSCHOOL, -BSDAGE)
+
+chile_student_teacher_111 <- chile_student_teacher_11 %>%
+  mutate_all(as.character) %>%
+  dplyr::select(-benchmark_math_avg_value, -ITSEX, -IDSCHOOL)
+
+chile_student_school_111 <- chile_student_school_11 %>%
+  mutate_all(as.character) %>%
+  dplyr::select(-benchmark_math_avg_value, -ITSEX, -IDSCHOOL)
+
+chile_all_11 <- chile_student_student_111 %>%
+  full_join(chile_student_teacher_111) %>%
+  full_join(chile_student_school_111) %>%
+  left_join(chile_simple_student_11) %>%
+  na.omit() %>% 
+  group_by(BCBG02, IDSCHOOL, BCBG07) %>%
+  mutate_all(as.factor) %>%
+  ungroup() %>%
+  mutate(BCBG02 = as.numeric(BCBG02)) %>%
+  mutate(BCBG07 = as.numeric(BCBG07)) %>%
+  mutate(IDSCHOOL = as.numeric(as.character(IDSCHOOL)))
+  
+#48.42 ; 20; 34.27 just low
+nb_model_all <- timss_student_nb(chile_all_11)
+
+chile_all_11_adjusted <- chile_all_11 %>%
+  mutate(benchmark_math_avg_value = adjust_student_benchmark(benchmark_math_avg_value))
+
+#70.15 ; 33.33; 64.46 if just low
+nb_model_all_adjusted <- timss_student_nb(chile_all_11_adjusted)
 
 detach(package:caret)
 detach(package:klaR)
 detach(package:MASS)
 
+nb_models_original <- list(nb_model_simple, nb_model_simple_sexless, nb_model_student_school, nb_model_student_teacher, nb_model_student_student, nb_model_all)
+nb_models_adjusted <- list(nb_model_simple_adjusted, nb_model_student_school_adjusted, nb_model_student_teacher_adjusted, nb_model_student_student_adjusted, nb_model_all_adjusted)
+
+accuracy_explained <- ''
+x = c('hi', 'bye', 'whatever')
+for(i in seq_along(nb_models_original)){
+  accuracy_explained <- str_c(accuracy_explained, '\n', str_c(nb_models_original[[i]][[3]], collapse = '\t'))
+}
+cat(accuracy_explained)
 
 #------------------------------------------------------------------------------------#
 #------------------------------------- SVM ------------------------------------------#
@@ -236,7 +276,6 @@ require(e1071)
 #---------------------------- Student Level -----------------------------------------#
 
 set.seed(1)
-train_student_chile <- sample(nrow(chile_simple_student), nrow(chile_simple_student)/2)
 
 timss_student_svm <- function(model){
   train <- sample(nrow(model), nrow(model)/2)
@@ -255,13 +294,28 @@ timss_student_svm <- function(model){
 }
 
 #svm is 53.71 and 77.69 for adjusted
-timss_student_svm(chile_simple_student)
-(0 + 774 + 47 + 246 + 492)/(nrow(chile_model_simple)/2)
-timss_student_svm(chile_simple_student_adjusted)
-(74  + 214 + 1967)/(nrow(chile_model_simple)/2)
+svm_model_simple <- analyze_model(chile_simple_student_11, timss_student_svm)
+svm_model_simple_adjusted <- analyze_model(chile_simple_student_adjusted_11, timss_student_svm)
 
-#svm is 51.51 and 62.06 for adjusted
-timss_student_svm(us_simple_student)
-(112 + 70 + 680 + 1270 + 557)/(nrow(us_simple_student)/2)
-timss_student_svm(us_simple_student_adjusted)
-(1052 + 1198 + 990)/(nrow(us_simple_student_adjusted)/2)
+prep_for_svm <- function(df){
+  svm_factors <- df %>%
+    select(-IDSTUD, -ITSEX, -benchmark_math_avg_value) %>%
+    Filter(f = is.factor) %>%
+    names()
+  
+  for(i in seq_along(svm_factors)){
+    df[svm_factors[i]] <- sapply(df[svm_factors[i]], function(x){
+        str_c(i, '_', x)
+    })
+    df <- df %>%
+      mutate(count = 1) %>%
+      spread_(svm_factors[i], 'count', fill = 0)
+  }
+  df
+}
+
+chile_student_school_11_svmprep <- prep_for_svm(chile_student_school_11)
+svm_model_student_school <- analyze_model(chile_student_school_11_svmprep, timss_student_svm)
+svm_model_student_school_adjusted <- analyze_model(prep_for_svm(chile_student_school_adjusted_11), timss_student_svm)
+
+
