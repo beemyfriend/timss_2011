@@ -1,39 +1,27 @@
 library(tidyverse)
 library(stringr)
-
-school_questions <- c('IDSCHOOL', 'BCBG02','BCBG03A', 'BCBG03B', 'BCBG04', 'BCBG07', 'BCBG10BB')
+library(gbm)
 
 school_codebook <- readxl::read_excel('bcgtmsm5.xls') %>%
-  select(FIELD_NAME, FIELD_LABL, FIELD_CODE) %>%
-  filter(FIELD_NAME %in% school_questions) %>%
+  select(FIELD_NAME, FIELD_LABL, FIELD_CODE)
   
 chile_school_general_11 <- haven::read_spss('bcgchlm5.sav') %>%
-  select_(.dots = names(.)[names(.) %in% school_questions]) %>%
   gather(question, answer, -IDSCHOOL) %>%
-  right_join(school_codebook, by = c('question' = 'FIELD_NAME'))
-
-teacher_questions <- c('IDSCHOOL', 'BTBG16A', 'BTBM23AB', 'BTBM23AC', 'BTBM23AD', 'BTBM23AE', 'BTBM23BA',
-                       'BTBM23BB', 'BTBM23BC', 'BTBM23BD', 'BTBM23BE', 'BTBM23CA', 'BTBM23CB',
-                       'BTBM23CC', 'BTBM23CD', 'BTBM23CE', 'BTBM23CF', 'BTBM23DA', 'BTBM23DB', 
-                       'BTBM23DC', 'BTBM25CE', 'BTBM27')
+  left_join(school_codebook, by = c('question' = 'FIELD_NAME'))
 
 teacher_codebook <- readxl::read_excel('btmtmsm5.xls') %>%
-  select(FIELD_NAME, FIELD_LABL, FIELD_CODE)
+  dplyr::select(FIELD_NAME, FIELD_LABL, FIELD_CODE)
 
 chile_teacher_general_11 <- haven::read_spss('btmchlm5.sav') %>%
-  select_(.dots = names(.)[names(.) %in% teacher_questions]) %>%
   gather(question, answer, -c(IDSCHOOL)) %>%
-  right_join(teacher_codebook, by = c('question' = 'FIELD_NAME')) %>%
-  filter(!is.na(IDSCHOOL))
-
-student_questions <- c('IDSTUD', 'BSDAGE', 'BSDGEDUP', 'BSBG11A', 'BSBG11D', 'BSBG05E', 'BSBG05F', 'BSBG05G',
-                       'BSBG05H', 'BSBG05I', 'BSBG05J', 'BSBG05K')
+  left_join(teacher_codebook, by = c('question' = 'FIELD_NAME')) %>%
+  filter(!is.na(IDSCHOOL)) %>%
+  mutate(IDSCHOOL = as.double(IDSCHOOL))
 
 student_general_codebook <- readxl::read_excel('bsgtmsm5.xls') %>%
-  select(FIELD_NAME, FIELD_LABL, FIELD_CODE)
+  dplyr::select(FIELD_NAME, FIELD_LABL, FIELD_CODE)
 
 chile_student_general_11 <- haven::read_spss('bsgchlm5.sav') %>%
-  select_(.dots = names(.)[names(.) %in% student_questions]) %>%
   mutate(diff_from_mean_age = BSDAGE - mean(BSDAGE)) %>%
   mutate(diff_from_mean_age_value = sapply(.$diff_from_mean_age, function(x){
     if(x > 2) {
@@ -49,8 +37,32 @@ chile_student_general_11 <- haven::read_spss('bsgchlm5.sav') %>%
     }
   })) %>%
   gather(question, answer, -IDSTUD) %>%
-  right_join(student_general_codebook, by = c('question' = 'FIELD_NAME')) %>%
+  left_join(student_general_codebook, by = c('question' = 'FIELD_NAME')) %>%
   filter(!is.na(IDSTUD)) 
+
+chile_all_11 <- rbind(chile_teacher_general_11, chile_school_general_11) %>%
+  filter(question != 'IDLINK' & question != 'TSYSTEM' & question != 'IDTEALIN') %>%
+  dplyr::select(-FIELD_LABL, -FIELD_CODE) %>%
+  distinct() %>%
+  filter(!is.na(answer)) %>%
+  spread(question, answer, fill = 0)
+
+chile_all_11b <- chile_student_general_11 %>%
+  distinct() %>%
+  filter(question != 'IDSCHOOL' & question != 'ITSEX') %>%
+  filter(!str_detect(question, '^BSM|^BSS|^BSBS')) %>%
+  dplyr::select(-FIELD_LABL, -FIELD_CODE) %>%
+  mutate(answer = as.numeric(answer)) %>%
+  filter(!is.na(answer)) %>%
+  spread(question, answer, fill = 0) %>%
+  na.omit()
+
+chile_all_11c <- chile_simple_student_11 %>%
+  mutate(IDSTUD = IDSTUD %>% as.character() %>% as.numeric()) %>%
+  left_join(chile_all_11b) %>%
+  mutate(IDSCHOOL = IDSCHOOL %>% as.character() %>% as.numeric) %>%
+  dplyr::select(-DPCDATE, -IDCNTRY, -IDGRADE, -IDGRADER, -IDPOP, -IDSTRATE, -IDSTRATI, -WGTADJ1, -WGTFAC1) %>% 
+  left_join(chile_all_11)
 
 chile_timss_math_11 <- read_csv('2011_TIMSS_CHILE.csv')
 
@@ -79,6 +91,8 @@ timss_simple_student_model_11 <- function(df){
 }
 
 chile_simple_student_11 <- timss_simple_student_model_11(chile_timss_math_11)
+
+
 
 #-------------------------------------------------------------------------------------#
 #------------------------------ Naive Bayes ------------------------------------------#
@@ -132,12 +146,12 @@ analyze_model <- function(df, model_func){
   model_info
 }
 
-nb_model_simple <-  timss_student_nb(chile_simple_student_11)
+nb_model_simple <-  analyze_model(chile_simple_student_11, timss_student_nb)
 #nb for chile_2011 is 57.35 ; Random guessing is 20 ; choosing only 'Below Low International' is 37.74
 
 #Let's just see what IDSCHOOL performs without ITSEX
 ##57.17 It turns out that using gender is helpful, but doesn't make a huge difference
-nb_model_simple_sexless <- timss_student_nb(chile_simple_student_11 %>% dplyr::select(-ITSEX))
+nb_model_simple_sexless <- analyze_model(chile_simple_student_11 %>% dplyr::select(-ITSEX), timss_student_nb)
 
 #let's try the first model (just ITSEX and IDSCHOOL), but combine andvanced with high and combine low with below low
 adjust_student_benchmark <- function(x){
@@ -155,74 +169,140 @@ chile_simple_student_adjusted_11 <- chile_simple_student_11 %>%
   mutate(benchmark_math_avg_value = adjust_student_benchmark(benchmark_math_avg_value))
 
 #nb model is 78.03 ; guessing is about 33.33 ; choosing just 'Low International' is 70.27
-nb_model_simple_adjusted <- timss_student_nb(chile_simple_student_adjusted_11)
+nb_model_simple_adjusted <- analyze_model(chile_simple_student_adjusted_11, timss_student_nb)
 
 chile_student_school_11 <- chile_simple_student_11 %>%
   mutate(IDSCHOOL = as.double(IDSCHOOL)) %>%
   left_join(chile_school_general_11) %>%
   filter(!is.na(question)) %>%
   dplyr::select(-FIELD_LABL, -FIELD_CODE) %>% 
-  spread(question, answer) %>%
-  dplyr::select(-BCBG04) %>%
-  na.omit() %>%
-  group_by(BCBG02, IDSCHOOL, BCBG07) %>%
+  spread(question, answer, fill = 0) %>%
+#  dplyr::select(-BCBG04) %>%
+  na.omit()# %>%
+#  group_by(BCBG02, IDSCHOOL, BCBG07) %>%
+#  mutate_all(as.factor) %>%
+#  ungroup()
+
+find_important_columns <- function(df, codebook){
+  set.seed(1234)
+  influence <- gbm(benchmark_math_avg_value~.-IDSTUD,
+      data = df,
+      distribution = 'gaussian',
+      n.trees = 200, 
+      interaction.depth = 4,
+      shrinkage = .1,
+      verbose = F) %>%
+    summary()
+  
+  left_join(influence, codebook, by = c('var' = 'FIELD_NAME'))
+  #list(influence, codebook %>% filter(FIELD_NAME %in% as.character(influence[,1])))
+}
+
+extract_important_columns <- function(df, cut_off = 0, get_rid = c()){
+  df %>%
+    filter(rel.inf >= cut_off) %>%
+    filter(!var %in% get_rid) %>%
+    .$var
+}
+
+
+#What is jacknife repeated repetition method and what is the importance of JKCZONE?
+#Take away JKCZONE until it is understood.
+student_school_columns <- find_important_columns(chile_student_school_11, school_codebook)
+student_school_influential_columns <- extract_important_columns(student_school_columns, 1.1, c('STOTWGTU', 'CSYSTEM', 'BCDG06HY', 'IDSTRATI', 'SCHWGT', 'JKCZONE', 'WGTFAC1'))
+chile_student_school_11 <- chile_student_school_11 %>%
+  select_(.dots = names(.)[names(.) %in% c(student_school_influential_columns, c('benchmark_math_avg_value', 'IDSTUD'))])
+summary(chile_student_school_11)
+chile_student_school_11 <- chile_student_school_11 %>%
+  group_by(BCBGSRS, BCBGMRS, BCBGDAS, BCBG07, BCBG06BB, BCBG06A, BCBG06BA, BCBG05A, BCBG02, BCBG01) %>%
   mutate_all(as.factor) %>%
   ungroup()
 
 #48.69 ; random guess is 20;just low is 33.11
-nb_model_student_school <- timss_student_nb(chile_student_school_11)
+nb_model_student_school <- analyze_model(chile_student_school_11, timss_student_nb)
 
 chile_student_school_adjusted_11 <- chile_student_school_11 %>%
   mutate(benchmark_math_avg_value = adjust_student_benchmark(benchmark_math_avg_value))
 
 #69.96; random guess 33.33; 66.16 just guessing low
-nb_model_student_school_adjusted <- timss_student_nb(chile_student_school_adjusted_11)
+nb_model_student_school_adjusted <- analyze_model(chile_student_school_adjusted_11, timss_student_nb)
 
+#questions that weren't asked turned to 0s because not enough teachers answered questions and all 'advanced' students were filtered out
 chile_student_teacher_11 <- chile_simple_student_11 %>%
   mutate(IDSCHOOL = as.double(IDSCHOOL)) %>%
+  mutate(IDSTUD = as.double(IDSTUD)) %>%
   left_join(chile_teacher_general_11) %>% 
+  filter(question != 'IDLINK' & question != 'TSYSTEM' & question != 'IDTEALIN') %>%
+  distinct() %>%
   filter(!is.na(answer)) %>% 
   dplyr::select(-c(FIELD_LABL, FIELD_CODE)) %>%
-  spread(question, answer) %>%
-  dplyr::select(-BTBM25CE) %>%
-  na.omit() %>%
-  group_by(IDSCHOOL) %>%
+  spread(question, answer, fill = 0) %>%
+#  dplyr::select(-BTBM25CE) %>%
+  na.omit() #%>%
+#  group_by(IDSCHOOL) %>%
+#  mutate_all(as.factor) %>%
+#  ungroup() 
+
+student_teacher_columns <- find_important_columns(chile_student_teacher_11, teacher_codebook)
+student_teacher_influential_columns <- extract_important_columns(student_teacher_columns, 1)
+chile_student_teacher_11 <- chile_student_teacher_11 %>%
+  select_(.dots = names(.)[names(.) %in% c(student_teacher_influential_columns, c('benchmark_math_avg_value', 'IDSTUD'))])
+
+summary(chile_student_teacher_11)
+chile_student_teacher_11 <- chile_student_teacher_11 %>%
+  group_by(BTBG01, BTBG12, BTBG13, BTBGCIT, BTBGTWC, BTBM24A, BTBM24D, BTDMHW) %>%
   mutate_all(as.factor) %>%
-  ungroup() 
+  ungroup()
 
 #46.62; 20; 33.82 below low
-nb_model_student_teacher <- timss_student_nb(chile_student_teacher_11)  
+nb_model_student_teacher <- analyze_model(chile_student_teacher_11, timss_student_nb)  
 
 chile_student_teacher_adjusted_11 <- chile_student_teacher_11 %>%
   mutate(benchmark_math_avg_value = adjust_student_benchmark(benchmark_math_avg_value))
 
 #69.96; 33.33; 67.61
-nb_model_student_teacher_adjusted <- timss_student_nb(chile_student_teacher_adjusted_11)
+nb_model_student_teacher_adjusted <- analyze_model(chile_student_teacher_adjusted_11, timss_student_nb)
 
 chile_student_student_11 <- chile_simple_student_11 %>%
   mutate(IDSTUD = IDSTUD %>% as.character() %>% as.numeric()) %>%
   left_join(chile_student_general_11) %>% 
+  mutate(answer = as.numeric(answer)) %>%
   filter(!is.na(answer)) %>%
+  filter(!str_detect(question, '^BSM|^BSS|^BSBS')) %>%
   dplyr::select(-FIELD_LABL, -FIELD_CODE) %>%
-  spread(question, answer) %>%
+  filter(question != 'IDSCHOOL' & question != 'ITSEX') %>%
+  filter(!is.na(answer)) %>%
+  spread(question, answer, fill = 0) %>%
   dplyr::select(-BSDAGE) %>%
-  na.omit() %>%
-  group_by(IDSCHOOL) %>%
+  na.omit()# %>%
+#  group_by(IDSCHOOL) %>%
+#  mutate_all(as.factor) %>%
+#  ungroup()
+
+student_student_columns <- find_important_columns(chile_student_student_11, student_general_codebook)
+student_student_influential_columns <- extract_important_columns(student_student_columns, .1, c('BSDSLOWP', 'BSDGSCM', 'BSDMLOWP'))
+chile_student_student_11 <- chile_student_student_11 %>%
+  select_(.dots = names(.)[names(.) %in% c(student_student_influential_columns, c('benchmark_math_avg_value', 'IDSTUD'))])
+
+summary(chile_student_student_11)
+chile_student_student_11 <- chile_student_student_11 %>%
+  group_by(diff_from_mean_age, BSBGSLS, BSBGSCM, BSBGHER) %>%
   mutate_all(as.factor) %>%
   ungroup()
 
+
 #45.25; 20; 34.36 below low
-nb_model_student_student <- timss_student_nb(chile_student_student_11)
+nb_model_student_student <- analyze_model(chile_student_student_11, timss_student_nb)
 
 chile_student_student_adjusted_11 <- chile_student_student_11 %>%
   mutate(benchmark_math_avg_value = adjust_student_benchmark(benchmark_math_avg_value))
 
 #71.76; 33.33; 67.96 low
-nb_model_student_student_adjusted <- timss_student_nb(chile_student_student_adjusted_11)
+nb_model_student_student_adjusted <- analyze_model(chile_student_student_adjusted_11, timss_student_nb)
 
 chile_student_student_111 <- chile_student_student_11 %>%
   mutate_all(as.character) %>%
-  dplyr::select(-benchmark_math_avg_value, -ITSEX, -IDSCHOOL, -BSDAGE)
+  dplyr::select(-benchmark_math_avg_value, -IDSCHOOL, -diff_from_mean_age)
 
 chile_student_teacher_111 <- chile_student_teacher_11 %>%
   mutate_all(as.character) %>%
@@ -244,28 +324,45 @@ chile_all_11 <- chile_student_student_111 %>%
   mutate(BCBG07 = as.numeric(BCBG07)) %>%
   mutate(IDSCHOOL = as.numeric(as.character(IDSCHOOL)))
   
-#48.42 ; 20; 34.27 just low
-nb_model_all <- timss_student_nb(chile_all_11)
+all_codebook <- rbind(student_general_codebook, teacher_codebook, school_codebook) %>% distinct()
 
-chile_all_11_adjusted <- chile_all_11 %>%
+chile_all_columns <- find_important_columns(chile_all_11c, all_codebook)
+chile_all_influential_columns <- extract_important_columns(chile_all_columns, .8, c('SCHWGT', 'IDSTRATE', 'BSDSLOWP', 'SSYSTEM', 'JKZONE', 'IDSTRATI', 'BSDMLOWP', 'BSBGSCM'))
+chile_all_11d <- chile_all_11c %>%
+  select_(.dots = names(.)[names(.) %in% c(chile_all_influential_columns, c('benchmark_math_avg_value', 'IDSTUD'))])
+summary(chile_all_11d)
+chile_all_11d <- chile_all_11d %>%
+  group_by(BCBGDAS, BCBG01, ITBIRTHD, BSDAGE, BSBGSVS, BSBGHER) %>%
+  mutate_all(as.factor) %>%
+  ungroup() %>%
+  na.omit()
+
+#48.42 ; 20; 34.27 just low
+nb_model_all <- analyze_model(chile_all_11d, timss_student_nb)
+
+chile_all_11d_adjusted <- chile_all_11d %>%
   mutate(benchmark_math_avg_value = adjust_student_benchmark(benchmark_math_avg_value))
 
 #70.15 ; 33.33; 64.46 if just low
-nb_model_all_adjusted <- timss_student_nb(chile_all_11_adjusted)
+nb_model_all_adjusted <- analyze_model(chile_all_11d_adjusted, timss_student_nb)
 
 detach(package:caret)
 detach(package:klaR)
 detach(package:MASS)
 
+compare_accuracy <- function(list_models){
+  accuracy_explained <- ''
+  for(i in seq_along(list_models)){
+    accuracy_explained <- str_c(accuracy_explained, '\n', str_c(list_models[[i]][[3]], collapse = '\t'))
+  }
+  cat(accuracy_explained)
+}
 nb_models_original <- list(nb_model_simple, nb_model_simple_sexless, nb_model_student_school, nb_model_student_teacher, nb_model_student_student, nb_model_all)
 nb_models_adjusted <- list(nb_model_simple_adjusted, nb_model_student_school_adjusted, nb_model_student_teacher_adjusted, nb_model_student_student_adjusted, nb_model_all_adjusted)
 
-accuracy_explained <- ''
-x = c('hi', 'bye', 'whatever')
-for(i in seq_along(nb_models_original)){
-  accuracy_explained <- str_c(accuracy_explained, '\n', str_c(nb_models_original[[i]][[3]], collapse = '\t'))
-}
-cat(accuracy_explained)
+compare_accuracy(nb_models_original)
+compare_accuracy(nb_models_adjusted)
+
 
 #------------------------------------------------------------------------------------#
 #------------------------------------- SVM ------------------------------------------#
@@ -331,7 +428,13 @@ str(chile_all_11)
 svm_model_all <- analyze_model(prep_for_svm(chile_all_11, c('IDSTUD', 'ITSEX', 'benchmark_math_avg_value')), timss_student_svm)
 svm_model_all_adjusted <- analyze_model(prep_for_svm(chile_all_11_adjusted, c('IDSTUD', 'ITSEX', 'benchmark_math_avg_value')), timss_student_svm)
 
-detach(e1071)
+svm_models_original <- list(svm_model_simple, svm_model_student_school, svm_model_student_teacher, svm_model_student_student, svm_model_all)
+svm_models_adjusted <- list(svm_model_simple_adjusted, svm_model_student_school_adjusted, svm_model_student_teacher_adjusted, svm_model_student_student_adjusted, svm_model_all_adjusted)
+
+compare_accuracy(svm_models_adjusted)
+compare_accuracy(svm_models_original)
+
+detach(package:e1071)
 
 #==================================================================================#
 #============================ Trees ===============================================#
@@ -340,8 +443,6 @@ detach(e1071)
 library(tree)
 library(randomForest)
 
-#require(Amelia)
-#missmap(timss_all_model_11)
 #trees can't have any factors with more than 32 levels()
 #needs to be even numbered rows for future comparison
 set.seed(1)
@@ -366,7 +467,7 @@ table(tree.pred, test_benchmark)
 cv.timss <- cv.tree(tree.timss, FUN = prune.misclass)
 #dev is cross validation error. smaller cv corresponds to ideal size
 cv.timss
-prune.timss = prune.misclass(tree.timss, best = 3)
+prune.timss = prune.misclass(tree.timss, best = 4)
 plot(prune.timss)
 text(prune.timss, pretty = 0)
 
@@ -410,11 +511,28 @@ varImpPlot(rf.timss)
 library(gbm)
 boost.timss <- gbm(benchmark_math_avg_value~.-IDSTUD,
                    data = tree_model[train,],
-                   distribution = 'gaussian',
+                   distribution = 'multinomial',
                    n.trees = 5000,
-                   interaction.depth = 4)
+                   interaction.depth = 4,
+                   shrinkage = .1)
 summary(boost.timss)
+gbm.perf(boost.timss)
 yhat.boost = predict(boost.timss, 
                      newdata = tree_model[-train,], 
                      n.trees = 5000)
+yhat.boost.factored <- apply(yhat.boost, 1, which.max)
 table(yhat.boost, timss_tree_test$benchmark_math_avg_value)
+boost.timss =gbm(benchmark_math_avg_value~.-IDSTUD,
+                 data = tree_model[train,],
+                 distribution = 'gaussian',
+                 n.trees = 5000,
+                 interaction.depth = 4, 
+                 shrinkage = .2,
+                 verbose = F)
+yhat.boost = predict.gbm(boost.timss,
+                     newdata = tree_model[-train,],
+                     n.trees = 5000,
+                     type = 'response')
+yhat.boost
+summary(boost.timss)
+pretty.gbm.tree(boost.timss)
