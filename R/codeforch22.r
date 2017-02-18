@@ -25,7 +25,9 @@ format_codebook <- function(excel_file){
       } else {
         return('Multiple-Choice')
       }
-    })) %>%
+    }) %>%
+      as.factor()
+      ) %>% 
     select(FIELD_NAME, FIELD_LABL, type_response, FIELD_CODE)
 }
 
@@ -57,7 +59,8 @@ extract_important_columns <- function(df, column_df, cut_off = 0, get_rid = c())
     select_(.dots = names(.)[names(.) %in% c(influential_columns, c('benchmark_math_avg_value', 'IDSTUD'))]) %>%
     group_by_(.dots = names(.)[names(.) %in% free_response_columns]) %>%
     mutate_all(as.factor) %>%
-    ungroup
+    ungroup() %>%
+    distinct()
 }
 
 timss_student_nb <- function(df, train_ratio = .75, seed = 4321){

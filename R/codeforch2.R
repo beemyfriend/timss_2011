@@ -9,6 +9,7 @@
 
 library(tidyverse)
 library(stringr)
+library(gbm)
 
 #-----------------------------------------------#
 #-------------- Functions ----------------------#
@@ -25,7 +26,8 @@ format_codebook <- function(excel_file){
       } else {
         return('Multiple-Choice')
       }
-    })) %>%
+    }) %>%
+      as.factor()) %>%
     select(FIELD_NAME, FIELD_LABL, type_response, FIELD_CODE)
 }
 
@@ -57,7 +59,8 @@ extract_important_columns <- function(df, column_df, cut_off = 0, get_rid = c())
     select_(.dots = names(.)[names(.) %in% c(influential_columns, c('benchmark_math_avg_value', 'IDSTUD'))]) %>%
     group_by_(.dots = names(.)[names(.) %in% free_response_columns]) %>%
     mutate_all(as.factor) %>%
-    ungroup
+    ungroup %>%
+    distinct()
 }
 
 timss_student_nb <- function(df, train_ratio = .75, seed = 4321){
@@ -152,13 +155,13 @@ prep_for_svm <- function(df, cols2ignore = c()){
   
   for(i in seq_along(svm_factors)){
     df[svm_factors[i]] <- sapply(df[svm_factors[i]], function(x){
-      str_c(i, '_', x)
+      str_c('temp_', i, '_', x)
     })
     df <- df %>%
       mutate(count = 1) %>%
       spread_(svm_factors[i], 'count', fill = 0)
   }
-  df
+  df 
 }
 
 timss_student_svm <- function(model, train_ratio = .75, seed = 1111){
@@ -210,7 +213,6 @@ timss_student_rforest <- function(df, train_ratio = .75, seed = 1212){
 #============= Dataframes ======================#
 #===============================================#
 
-library(gbm)
 
 #-----------------------------------------------#
 #------------- Student Achievement -------------#
@@ -265,7 +267,7 @@ chile_student_school_11 <- chile_simple_student_11 %>%
 student_school_columns <- find_important_columns(chile_student_school_11, school_codebook)
 student_school_influential_columns <- extract_important_columns(chile_student_school_11,
                                                                 student_school_columns,
-                                                                1.1,
+                                                                .7,
                                                                 c('STOTWGTU', 'CSYSTEM', 'BCDG06HY', 'IDSTRATI', 'SCHWGT', 'JKCZONE', 'WGTFAC1'))
 
 #-----------------------------------------------#
@@ -294,7 +296,8 @@ chile_student_teacher_11 <- chile_simple_student_11 %>%
 student_teacher_columns <- find_important_columns(chile_student_teacher_11, teacher_codebook)
 student_teacher_influential_columns <- extract_important_columns(chile_student_teacher_11, 
                                                                  student_teacher_columns,
-                                                                 .8)
+                                                                 .8,
+                                                                 c('IDTEACH'))
 
 #-----------------------------------------------#
 #--------------- student-student combo ---------#
@@ -317,6 +320,7 @@ chile_student_general_11 <- haven::read_spss('bsgchlm5.sav') %>%
       return('Much Younger')
     }
   })) %>%
+  select(-diff_from_mean_age) %>%
   gather(question, answer, -IDSTUD) %>%
   left_join(student_general_codebook, by = c('question' = 'FIELD_NAME')) %>%
   filter(!is.na(IDSTUD)) 
@@ -338,9 +342,7 @@ student_student_columns <- find_important_columns(chile_student_student_11, stud
 student_student_influential_columns <- extract_important_columns(chile_student_student_11,
                                                                  student_student_columns,
                                                                  .09,
-                                                                 c('BSDSLOWP')) %>%
-  mutate(diff_from_mean_age = diff_from_mean_age %>% as.character() %>% as.numeric())
-
+                                                                 c('BSDSLOWP', 'type_response', 'WGTFAC1', 'HOUWGT', 'BSDMLOWP')) 
 
 #-----------------------------------------------#
 #------------ All Info combo -------------------#
@@ -380,8 +382,8 @@ chile_all_influential_columns <- extract_important_columns(chile_all_11,
                                                            chile_all_columns,
                                                            .8,
                                                            c('STOTWGTU', 'HOUWGT', 'BSDSLOWP', 'IDSTRATE', 
-                                                             'SSYSTEM', 'JKZONE', 'IDSTRATI', 'BSDMLOWP'))
-
+                                                             'SSYSTEM', 'JKZONE', 'IDSTRATI', 'BSDMLOWP', 
+                                                             'WGTFAC1', 'type_response', 'IDCLASS', 'SCHWGT'))
 detach(package:gbm)
 
 #===============================================#
@@ -427,7 +429,7 @@ nb_models_original <- list(nb_model_simple, nb_model_student_school, nb_model_st
 nb_models_adjusted <- list(nb_model_simple_adjusted, nb_model_student_school_adjusted, nb_model_student_teacher_adjusted, nb_model_student_student_adjusted, nb_model_chile_all_adjusted)
 
 compare_accuracy(nb_models_original)
-compare_accuracy(nb_models_adjusted)
+compare_accuracy(nb_models_adjusted, T)
 
 #-----------------------------------------------#
 #------- Support Vector Machine ----------------#
@@ -445,39 +447,39 @@ svm_model_simple_adjusted <- chile_simple_student_11 %>%
   analyze_model(timss_student_svm, 'SVM: Simple Adjusted')
 
 svm_model_student_school <- student_school_influential_columns %>%
-  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value' )) %>%
+  #prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value' )) %>%
   analyze_model(timss_student_svm, 'SVM: Student-School Combo')
 
 svm_model_student_school_adjusted <- student_school_influential_columns %>%
   adjust_student_benchmark() %>%
-  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value')) %>%
+#  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value')) %>%
   analyze_model(timss_student_svm, 'SVM: Student-School Combo Adjusted')
 
 svm_model_student_teacher <- student_teacher_influential_columns %>%
-  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value')) %>%
+#  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value')) %>%
   analyze_model(timss_student_svm, 'SVM: Student-Teacher Combo')
 
 svm_model_student_teacher_adjusted <- student_teacher_influential_columns %>%
   adjust_student_benchmark() %>%
-  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value')) %>%
+#  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value')) %>%
   analyze_model(timss_student_svm, 'SVM: Student-Teacher Combo Adjusted')
 
 svm_model_student_student <- student_student_influential_columns %>%
-  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value')) %>%
+#  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value')) %>%
   analyze_model(timss_student_svm, 'SVM: Student-Student Combo')
 
 svm_model_student_student_adjusted <-student_student_influential_columns %>%
   adjust_student_benchmark() %>%
-  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value')) %>%
+#  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value')) %>%
   analyze_model(timss_student_svm, 'SVM: Student-Student Combo Adjusted')
 
 svm_model_chile_all <- chile_all_influential_columns %>%
-  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value')) %>%
+#  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value')) %>%
   analyze_model(timss_student_svm, 'SVM: Full Combo')
 
 svm_model_chile_all_adjusted <- chile_all_influential_columns %>%
   adjust_student_benchmark() %>%
-  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value')) %>%
+#  prep_for_svm(c('IDSTUD', 'benchmark_math_avg_value')) %>%
   analyze_model(timss_student_svm, 'SVM: Full Combo Adjusted')
 
 detach(package:e1071)
@@ -486,7 +488,7 @@ svm_models_original <- list(svm_model_simple, svm_model_student_school, svm_mode
 svm_models_adjusted <- list(svm_model_simple_adjusted, svm_model_student_school_adjusted, svm_model_student_teacher_adjusted, svm_model_student_student_adjusted, svm_model_chile_all_adjusted)
 
 compare_accuracy(svm_models_original)
-compare_accuracy(svm_models_adjusted)
+compare_accuracy(svm_models_adjusted, T)
 
 #-----------------------------------------------#
 #----------- Trees -----------------------------#
@@ -604,4 +606,39 @@ rforest_models_original <- list(rforest_model_simple, rforest_model_student_scho
 rforest_models_adjusted <- list(rforest_model_simple_adjusted, rforest_model_student_school_adjusted, rforest_model_student_teacher_adjusted, rforest_model_student_student_adjusted, rforest_model_chile_all_adjusted)
 
 compare_accuracy(rforest_models_original)
-compare_accuracy(rforest_models_adjusted)
+compare_accuracy(rforest_models_adjusted, T)
+
+#===============================================#
+#============ Results ==========================#
+#===============================================#
+
+#-----------------------------------------------#
+#------------ Accuracy Table -------------------#
+#-----------------------------------------------#
+
+models_original <- list(nb_model_simple, nb_model_student_school, nb_model_student_teacher, nb_model_student_student, nb_model_chile_all,
+                        svm_model_simple, svm_model_student_school, svm_model_student_teacher, svm_model_student_student, svm_model_chile_all,
+                        tree_model_simple, tree_model_student_school, tree_model_student_teacher, tree_model_student_student, tree_model_chile_all,
+                        rforest_model_simple, rforest_model_student_school, rforest_model_student_teacher, rforest_model_student_student, rforest_model_chile_all)
+
+models_adjusted <- list(nb_model_simple_adjusted, nb_model_student_school_adjusted, nb_model_student_teacher_adjusted, nb_model_student_student_adjusted, nb_model_chile_all_adjusted,
+                        svm_model_simple_adjusted, svm_model_student_school_adjusted, svm_model_student_teacher_adjusted, svm_model_student_student_adjusted, svm_model_chile_all_adjusted,
+                        tree_model_simple_adjusted, tree_model_student_school_adjusted, tree_model_student_teacher_adjusted, tree_model_student_student_adjusted, tree_model_chile_all_adjusted,
+                        rforest_model_simple_adjusted, rforest_model_student_school_adjusted, rforest_model_student_teacher_adjusted, rforest_model_student_student_adjusted, rforest_model_chile_all_adjusted)
+
+compare_accuracy(models_original) %>%
+  mutate('Improvement' = Overall - `Optimized Guess`)
+compare_accuracy(models_adjusted, T) %>%
+  mutate('Improvement' = Overall - `Optimized Guess`)
+
+#-----------------------------------------------#
+#---------- Selected Columns -------------------#
+#-----------------------------------------------#
+
+student_school_columns %>% filter(rel.inf > .7 ) %>% select(-type_response, -FIELD_CODE) %>% filter(!var %in% c('STOTWGTU', 'CSYSTEM', 'BCDG06HY', 'IDSTRATI', 'SCHWGT', 'JKCZONE', 'WGTFAC1'))
+
+student_teacher_columns %>% filter(rel.inf>.8) %>% select(-type_response, -FIELD_CODE) %>% filter( !var %in% c('IDTEACH'))
+
+student_student_columns %>% filter(rel.inf > .09) %>% select(-type_response, -FIELD_CODE) %>% filter( !var %in% c('BSDSLOWP', 'type_response', 'WGTFAC1', 'HOUWGT', 'BSDMLOWP'))
+
+chile_all_columns %>% filter(rel.inf > .8) %>% select(-type_response, -FIELD_CODE) %>% filter( !var %in% c('STOTWGTU', 'HOUWGT', 'BSDSLOWP', 'IDSTRATE', 'SSYSTEM', 'JKZONE', 'IDSTRATI', 'BSDMLOWP', 'WGTFAC1', 'type_response', 'IDCLASS', 'SCHWGT'))
