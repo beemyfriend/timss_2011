@@ -66,10 +66,10 @@ timss_student_nb <- function(df, train_ratio = .75, seed = 4321){
   
   clean_df <- df %>%
     dplyr::select(-c(benchmark_math_avg_value, IDSTUD))
-  
+
   train_df <- clean_df[train,]
   test_df <- clean_df[-train,]
-  
+    
   train_y <- df$benchmark_math_avg_value[train]
   test_y <- df$benchmark_math_avg_value[-train]
   
@@ -89,58 +89,46 @@ analyze_model <- function(df, model_func, model_name){
   correct_in_col <- c()
   total_in_col <- c()
   correct_ratio <- c()
-  benchmark_levels <- c()
+  
   for(i in 1:ncol(model_table)){
     correct_in_col[i] = model_table[i,i]
     total_in_col[i] = model_table[,i] %>%
       sum()
     correct_ratio[i] = str_c(dimnames(model_table)[[1]][i], ': ', round((100 * correct_in_col[i]/total_in_col[i]), 2), '%')
-    benchmark_levels[i] = dimnames(model_table)[[1]][i]
   }
   correct_ratio_mean <- mean(correct_in_col/total_in_col)
   correct_ratio[length(correct_ratio) + 1] = str_c('Overall: ',round((100 * sum(correct_in_col)/sum(total_in_col)), 2), '%')
   model_info[[2]] = c(correct_in_col/total_in_col, sum(correct_in_col)/sum(total_in_col))
-  model_info[[3]] = c(benchmark_levels, c('Overall'))
-  model_info[[4]] = correct_ratio
-  model_info[[5]] = table(df$benchmark_math_avg_value, df$benchmark_math_avg_value)
-  model_info[[6]] = max(total_in_col)/sum(total_in_col)
-  model_info[[7]] = str_c('Just guessing \'', dimnames(model_table)[[1]][which.max(total_in_col)], '\': ', round((100 * max(total_in_col)/sum(total_in_col)), 2),'%')
-  model_info[[8]] = correct_ratio_mean
-  model_info[[9]] = model_name
-  names(model_info) <- c('confusion_matrix', 'accuracy', 'benchmark_levels','accuracy_explained', 'truth_matrix', 'optimized_single_guess','optimized_single_guess_explained', 'correct_ratio_mean', 'model_name')
+  model_info[[3]] = correct_ratio
+  
+  guess_table <- table(df$benchmark_math_avg_value, df$benchmark_math_avg_value)
+  model_info[[4]] = guess_table
+  model_info[[5]] = max(total_in_col)/sum(total_in_col)
+  model_info[[6]] = str_c('Just guessing \'', dimnames(model_table)[[1]][which.max(total_in_col)], '\': ', round((100 * max(total_in_col)/sum(total_in_col)), 2),'%')
+  model_info[[7]] = correct_ratio_mean
+  model_info[[8]] = model_name
+  names(model_info) <- c('confusion_matrix', 'accuracy', 'accuracy_explained', 'truth_matrix', 'optimized_single_guess','optimized_single_guess_explained', 'correct_ratio_mean', 'model_name')
   model_info
 }
 
 adjust_student_benchmark <- function(df){
   df %>%
     mutate(benchmark_math_avg_value = sapply(as.character(benchmark_math_avg_value), function(y){
-      if(y == 'Below Low'){
-        'Low'
-      } else if (y == 'Advanced') {
-        'High'
-      } else {
-        y
-      }}) %>%
-        as.factor())}
+    if(y == 'Below Low'){
+      'Low'
+    } else if (y == 'Advanced') {
+      'High'
+    } else {
+      y
+    }}) %>%
+    as.factor())}
 
-compare_accuracy <- function(list_models, is_adjusted = F){
-
-  table_df <- data_frame('Model Name' = 'chr', 'Advanced' = 1, 'High' = 1, 'Intermediate' = 1, 'Low' = 1, 'Below Low' = 1, 'Overall' = 1,'Optimized Guess' =  1)
-  
-  if(is_adjusted){
-    table_df <- table_df %>%
-      select(-Advanced, -`Below Low`)
-  }
-    
+compare_accuracy <- function(list_models){
+  accuracy_explained <- ''
   for(i in seq_along(list_models)){
-    for(j in seq_along(list_models[[i]][[2]])){
-      table_df[i, list_models[[i]][[3]][j]] <- round((list_models[[i]][[2]][j] * 100), 2)
-    }
-    table_df[i, 'Model Name'] <- list_models[[i]][[9]]
-    table_df[i, 'Optimized Guess'] <- round((list_models[[i]][[6]] * 100), 2)
+    accuracy_explained <- str_c(accuracy_explained, '\n', str_c(list_models[[i]][[3]], collapse = '\t'))
   }
-  
-  table_df
+  cat(accuracy_explained)
 }
 
 #factors with more than 2 levels like school need to be turned into a yes/no matrix
@@ -163,7 +151,7 @@ prep_for_svm <- function(df, cols2ignore = c()){
 
 timss_student_svm <- function(model, train_ratio = .75, seed = 1111){
   set.seed(seed)
-  
+
   train <- sample(nrow(model), (nrow(model) * train_ratio))
   
   svm_train <- model[train,] 
@@ -187,7 +175,7 @@ timss_student_tree <- function(model, train_ratio = .75, seed = 7777){
   
   tree.timss <- tree(benchmark_math_avg_value~.-IDSTUD, data = model, subset = train)
   tree.pred = predict(tree.timss, tree_test, type = 'class')
-  
+
   table(tree.pred, test_benchmark)
   
 }
@@ -336,9 +324,9 @@ chile_student_student_11 <- chile_simple_student_11 %>%
 
 student_student_columns <- find_important_columns(chile_student_student_11, student_general_codebook)
 student_student_influential_columns <- extract_important_columns(chile_student_student_11,
-                                                                 student_student_columns,
-                                                                 .09,
-                                                                 c('BSDSLOWP')) %>%
+                                                                student_student_columns,
+                                                                .09,
+                                                                c('BSDSLOWP')) %>%
   mutate(diff_from_mean_age = diff_from_mean_age %>% as.character() %>% as.numeric())
 
 
@@ -377,10 +365,10 @@ all_codebook <- rbind(student_general_codebook, teacher_codebook, school_codeboo
 chile_all_columns <- find_important_columns(chile_all_11, all_codebook)
 #Need a better understanding of jacknife before I include jkzone and idstrat in analysis
 chile_all_influential_columns <- extract_important_columns(chile_all_11, 
-                                                           chile_all_columns,
-                                                           .8,
-                                                           c('STOTWGTU', 'HOUWGT', 'BSDSLOWP', 'IDSTRATE', 
-                                                             'SSYSTEM', 'JKZONE', 'IDSTRATI', 'BSDMLOWP'))
+                                                                 chile_all_columns,
+                                                                 .8,
+                                                                 c('STOTWGTU', 'HOUWGT', 'BSDSLOWP', 'IDSTRATE', 
+                                                                   'SSYSTEM', 'JKZONE', 'IDSTRATI', 'BSDMLOWP'))
 
 detach(package:gbm)
 
@@ -398,7 +386,7 @@ nb_model_simple <-  analyze_model(chile_simple_student_11, timss_student_nb, 'NB
 nb_model_simple_adjusted <- chile_simple_student_11 %>%
   adjust_student_benchmark() %>%
   analyze_model(timss_student_nb, 'NB: Simple Adjusted')
-
+  
 nb_model_student_school <- analyze_model(student_school_influential_columns, timss_student_nb, 'NB: Student-School Combo')
 nb_model_student_school_adjusted <- student_school_influential_columns %>%
   adjust_student_benchmark() %>%
@@ -545,7 +533,7 @@ tree_models_original <- list(tree_model_simple, tree_model_student_school, tree_
 tree_models_adjusted <- list(tree_model_simple_adjusted, tree_model_student_school_adjusted, tree_model_student_teacher_adjusted, tree_model_student_student_adjusted, tree_model_chile_all_adjusted)
 
 compare_accuracy(tree_models_original)
-compare_accuracy(tree_models_adjusted, T)
+compare_accuracy(tree_models_adjusted)
 
 #-----------------------------------------------#
 #---------- Random Forests ---------------------#
